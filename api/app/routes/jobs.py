@@ -16,7 +16,8 @@ import redis.asyncio as aioredis
 
 from app.database import get_db
 from app.redis import get_redis
-from app.models_db import Job
+from app.models_db import Job, APIKey
+from app.dependencies import verify_api_key_and_rate_limit
 from app.services.queue import enqueue_job
 from app.services.cache import get_cached_job, set_cached_job, invalidate_job_cache
 from forge_shared import JobCreate, JobListResponse, JobResponse, JobStatus
@@ -62,6 +63,7 @@ async def create_job(
     response: Response = None,  # injected by FastAPI
     db: AsyncSession = Depends(get_db),
     redis: aioredis.Redis = Depends(get_redis),
+    api_key: APIKey = Depends(verify_api_key_and_rate_limit),
 ):
     """
     Race-condition strategy

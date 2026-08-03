@@ -2,10 +2,10 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from sqlalchemy import text
+from sqlalchemy import select, text
 
-from app.database import engine
-from app.models_db import Base
+from app.database import engine, async_session
+from app.models_db import Base, APIKey
 from app.redis import init_redis, close_redis
 from app.routes.jobs import router as jobs_router
 from app.routes.dlq import router as dlq_router
@@ -22,10 +22,11 @@ async def lifespan(app: FastAPI):
     On startup:
       1. Creates all Postgres tables (dev convenience — use Alembic in prod).
       2. Initialises the Redis connection pool.
+      3. Seeds a default developer API key if no keys exist.
 
     On shutdown:
       1. Closes the Redis connection pool.
-      2. Disposes the SQLAlchemy engine (returns DB connections to the OS).
+      2. Disposes the SQLAlchemy engine.
     """
     # --- Startup ---
     logger.info("Creating database tables (if not exists)...")
@@ -35,6 +36,23 @@ async def lifespan(app: FastAPI):
 
     logger.info("Initialising Redis connection pool...")
     await init_redis()
+
+    # Seed default API key for development
+    try:
+        async with async_session() as session:
+            async with session.begin():
+                res = await session.execute(select(APIKey).limit(1))
+                if not res.scalars().first():
+                    dev_key = APIKey(
+                        key="forge_dev_key_123",
+                        name="Default Developer Key",
+                        rate_limit_rpm=60,
+                        is_active=True,
+                    )
+                    session.add(dev_key)
+                    logger.info("Seeded default API key: 'forge_dev_key_123' (limit: 60 req/min)")
+    except Exception as e:
+        logger.warning(f"Skipped API key seeding: {e}")
 
     yield
 
