@@ -6,6 +6,7 @@ from sqlalchemy import text
 
 from app.database import engine
 from app.models_db import Base
+from app.redis import init_redis, close_redis
 from app.routes.jobs import router as jobs_router
 from forge_shared import JobStatus
 
@@ -17,18 +18,29 @@ async def lifespan(app: FastAPI):
     """
     Application lifespan manager.
 
-    On startup: creates all tables defined in Base.metadata if they don't exist.
-    This is convenient for development — in production you'd use Alembic migrations
-    to manage schema changes without risking data loss.
+    On startup:
+      1. Creates all Postgres tables (dev convenience — use Alembic in prod).
+      2. Initialises the Redis connection pool.
 
-    On shutdown: disposes the connection pool gracefully.
+    On shutdown:
+      1. Closes the Redis connection pool.
+      2. Disposes the SQLAlchemy engine (returns DB connections to the OS).
     """
+    # --- Startup ---
     logger.info("Creating database tables (if not exists)...")
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("Database tables ready.")
+
+    logger.info("Initialising Redis connection pool...")
+    await init_redis()
+
     yield
+
+    # --- Shutdown ---
+    await close_redis()
     await engine.dispose()
+    logger.info("All connections closed.")
 
 
 app = FastAPI(
@@ -53,7 +65,8 @@ def read_root():
 
 @app.get("/health")
 async def health_check():
-    """Basic liveness probe. Checks DB connectivity."""
+    """Liveness probe. Checks both DB and Redis connectivity."""
+    # Postgres check
     try:
         async with engine.begin() as conn:
             await conn.execute(text("SELECT 1"))
@@ -61,8 +74,27 @@ async def health_check():
     except Exception:
         db_status = "disconnected"
 
+    # Redis check
+    # NOTE: We import _redis_pool locally because the module-level global is
+    # reassigned in init_redis(). A top-level `from app.redis import _redis_pool`
+    # would capture the initial None and never see the updated reference.
+    try:
+        from app.redis import _redis_pool
+        if _redis_pool is not None:
+            await _redis_pool.ping()
+            redis_status = "connected"
+        else:
+            redis_status = "not_initialised"
+    except Exception:
+        redis_status = "disconnected"
+
+    overall = "healthy"
+    if db_status != "connected" or redis_status != "connected":
+        overall = "degraded"
+
     return {
-        "status": "healthy" if db_status == "connected" else "degraded",
+        "status": overall,
         "database": db_status,
+        "redis": redis_status,
         "job_statuses": [s.value for s in JobStatus],
     }

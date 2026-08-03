@@ -1,8 +1,8 @@
 """
 Job CRUD endpoints.
 
-POST /jobs      — Idempotent job creation (INSERT ... ON CONFLICT DO NOTHING)
-GET  /jobs/{id} — Retrieve a single job by UUID
+POST /jobs      — Idempotent job creation → Postgres + Redis queue
+GET  /jobs/{id} — Retrieve a single job (cached: memory → Redis → Postgres)
 GET  /jobs      — List jobs with optional status filter + pagination
 """
 
@@ -12,12 +12,35 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
+import redis.asyncio as aioredis
 
 from app.database import get_db
+from app.redis import get_redis
 from app.models_db import Job
+from app.services.queue import enqueue_job
+from app.services.cache import get_cached_job, set_cached_job, invalidate_job_cache
 from forge_shared import JobCreate, JobListResponse, JobResponse, JobStatus
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
+
+
+def _job_to_dict(job: Job) -> dict:
+    """Convert a SQLAlchemy Job row to a plain dict suitable for caching."""
+    return {
+        "id": str(job.id),
+        "idempotency_key": job.idempotency_key,
+        "job_type": job.job_type,
+        "payload": job.payload,
+        "status": job.status,
+        "priority": job.priority,
+        "attempts": job.attempts,
+        "max_attempts": job.max_attempts,
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "updated_at": job.updated_at.isoformat() if job.updated_at else None,
+        "run_after": job.run_after.isoformat() if job.run_after else None,
+        "result": job.result,
+        "error": job.error,
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -38,6 +61,7 @@ async def create_job(
     body: JobCreate,
     response: Response = None,  # injected by FastAPI
     db: AsyncSession = Depends(get_db),
+    redis: aioredis.Redis = Depends(get_redis),
 ):
     """
     Race-condition strategy
@@ -55,6 +79,17 @@ async def create_job(
     Why not INSERT ... ON CONFLICT DO UPDATE (upsert)?
       → We don't want the second caller to silently mutate the first job's
         payload.  DO NOTHING preserves the original job untouched.
+
+    Enqueue-after-commit strategy
+    ─────────────────────────────
+    We push to Redis AFTER the Postgres commit succeeds. This means:
+      • If Postgres fails → no Redis entry (correct: job doesn't exist).
+      • If Redis fails → job is in Postgres but not in the queue.
+        A recovery sweeper (Phase 3+) can detect "queued" jobs in Postgres
+        that aren't in Redis and re-enqueue them.
+    This ordering preference is called "write-ahead to durable store" —
+    it's better to have a job that exists but isn't queued (recoverable)
+    than a queued job that doesn't exist in Postgres (data loss).
     """
 
     # Build the INSERT ... ON CONFLICT DO NOTHING ... RETURNING * statement.
@@ -77,9 +112,18 @@ async def create_job(
     row = result.scalars().first()
 
     if row is not None:
-        # New job was inserted — commit and return 201.
+        # New job was inserted — commit and enqueue to Redis.
         await db.commit()
         await db.refresh(row)
+
+        # Push to Redis priority queue (after Postgres commit).
+        await enqueue_job(
+            redis,
+            job_id=str(row.id),
+            priority=body.priority,
+            run_after=body.run_after,
+        )
+
         return row
 
     # Conflict path: the idempotency_key already exists.
@@ -106,17 +150,31 @@ async def create_job(
 
 
 # --------------------------------------------------------------------------- #
-# GET /jobs/{job_id} — Single job lookup
+# GET /jobs/{job_id} — Single job lookup (with cache)
 # --------------------------------------------------------------------------- #
 @router.get(
     "/{job_id}",
     response_model=JobResponse,
     summary="Get a job by ID",
+    description=(
+        "Retrieve a single job. Results are served from a two-tier cache "
+        "(in-memory 2s TTL → Redis 10s TTL) to avoid hammering Postgres "
+        "on repeated dashboard polls."
+    ),
 )
 async def get_job(
     job_id: UUID,
     db: AsyncSession = Depends(get_db),
+    redis: aioredis.Redis = Depends(get_redis),
 ):
+    job_id_str = str(job_id)
+
+    # --- Cache read-through ---
+    cached = await get_cached_job(redis, job_id_str)
+    if cached is not None:
+        return cached
+
+    # --- Cache miss: query Postgres ---
     result = await db.execute(select(Job).where(Job.id == job_id))
     job = result.scalars().first()
 
@@ -125,6 +183,11 @@ async def get_job(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Job {job_id} not found",
         )
+
+    # Backfill both cache tiers
+    job_dict = _job_to_dict(job)
+    await set_cached_job(redis, job_id_str, job_dict)
+
     return job
 
 
