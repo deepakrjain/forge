@@ -17,6 +17,7 @@ from app.redis import get_redis
 from app.models_db import Job
 from app.services.queue import enqueue_job, remove_from_dlq
 from app.services.cache import invalidate_job_cache
+from app.services.events import publish_job_event
 from forge_shared import JobListResponse, JobResponse, JobStatus
 
 router = APIRouter(prefix="/dlq", tags=["dlq"])
@@ -100,9 +101,10 @@ async def retry_dead_job(
         job.result = None
         job.run_after = None
 
-    # Database committed. Now update Redis & cache.
+    # Database committed. Now update Redis, cache & publish event.
     await remove_from_dlq(redis, job_id_str)
     await enqueue_job(redis, job_id_str, priority=job.priority)
     await invalidate_job_cache(redis, job_id_str)
+    await publish_job_event(redis, job_id_str, old_status="dead", new_status="queued")
 
     return job

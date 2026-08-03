@@ -20,6 +20,7 @@ from app.models_db import Job, APIKey
 from app.dependencies import verify_api_key_and_rate_limit
 from app.services.queue import enqueue_job
 from app.services.cache import get_cached_job, set_cached_job, invalidate_job_cache
+from app.services.events import publish_job_event
 from forge_shared import JobCreate, JobListResponse, JobResponse, JobStatus
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -125,6 +126,9 @@ async def create_job(
             priority=body.priority,
             run_after=body.run_after,
         )
+
+        # Publish live event to Redis Pub/Sub
+        await publish_job_event(redis, job_id=str(row.id), old_status=None, new_status="queued")
 
         return row
 

@@ -8,7 +8,11 @@ Architecture & Design Overview
    The worker uses a single polling loop that pops job IDs from Redis (`ZPOPMIN`).
    New jobs are spawned as asynchronous tasks guarded by an `asyncio.Semaphore`.
 
-2. Exponential Backoff & Retry Logic (Phase 4):
+2. Real-Time Events (Phase 6):
+   - On status changes (`queued` -> `running`, `running` -> `succeeded`/`failed`/`retrying`/`dead`),
+     publishes event to Redis Pub/Sub channel `forge:events:jobs`.
+
+3. Exponential Backoff & Retry Logic (Phase 4):
    - On execution failure:
      • If `attempts < max_attempts`: status transitions to `retrying`.
        Calculates `delay = min(base_delay * 2^(attempts - 1), max_delay) + jitter`.
@@ -16,17 +20,18 @@ Architecture & Design Overview
      • If `attempts >= max_attempts`: status transitions to `dead`.
        Pushes the job ID into the Dead Letter Queue (`forge:queue:dlq`).
 
-3. Delayed Job Promotion:
+4. Delayed Job Promotion:
    - Worker continuously runs `promote_delayed_jobs()` to move matured jobs
      (`run_after <= now()`) from `forge:queue:delayed` into `forge:queue:jobs`.
 
-4. Graceful Shutdown (SIGTERM / SIGINT):
+5. Graceful Shutdown (SIGTERM / SIGINT):
    - Signals trigger `shutdown_requested = True`.
    - Polling loop stops dequeuing new work.
    - Active in-flight tasks are given up to 30s to finish before cancellation.
 """
 
 import asyncio
+import json
 import logging
 import random
 import signal
@@ -60,6 +65,7 @@ logging.basicConfig(
 logger = logging.getLogger(f"forge.worker.{WORKER_ID}")
 
 CACHE_PREFIX = "forge:job:"
+EVENTS_CHANNEL = "forge:events:jobs"
 
 
 def compute_backoff_delay(attempts: int, base_delay: float = 2.0, max_delay: float = 3600.0) -> float:
@@ -78,6 +84,25 @@ async def invalidate_redis_cache(redis_client: aioredis.Redis, job_id: str):
         await redis_client.delete(f"{CACHE_PREFIX}{job_id}")
     except Exception as e:
         logger.warning(f"Failed to invalidate cache for job {job_id}: {e}")
+
+
+async def publish_job_event(
+    redis_client: aioredis.Redis,
+    job_id: str,
+    old_status: Optional[str],
+    new_status: str,
+):
+    """Publish live event payload to Redis Pub/Sub."""
+    event = {
+        "job_id": str(job_id),
+        "old_status": old_status,
+        "new_status": new_status,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        await redis_client.publish(EVENTS_CHANNEL, json.dumps(event))
+    except Exception as e:
+        logger.warning(f"Failed to publish event for job {job_id}: {e}")
 
 
 async def process_job(
@@ -99,6 +124,7 @@ async def process_job(
         # ------------------------------------------------------------------- #
         # Step 1: Claim job in Postgres (status -> running, attempts += 1)
         # ------------------------------------------------------------------- #
+        old_status: Optional[str] = None
         async with async_session() as session:
             async with session.begin():
                 result = await session.execute(
@@ -114,6 +140,7 @@ async def process_job(
                     logger.info(f"Job {job_id_str} was cancelled prior to execution. Skipping.")
                     return
 
+                old_status = job.status
                 job.status = JobStatus.RUNNING.value
                 job.attempts += 1
                 job.updated_at = datetime.now(timezone.utc)
@@ -124,8 +151,9 @@ async def process_job(
                 max_attempts = job.max_attempts
                 priority = job.priority
 
-            # Transaction committed. Invalidate cache.
+            # Transaction committed. Invalidate cache and publish live event.
             await invalidate_redis_cache(redis_client, job_id_str)
+            await publish_job_event(redis_client, job_id_str, old_status=old_status, new_status="running")
 
         # ------------------------------------------------------------------- #
         # Step 2: Execute handler
@@ -146,8 +174,9 @@ async def process_job(
             logger.warning(f"Job {job_id_str} failed execution on attempt {attempts}/{max_attempts}: {exc}")
 
         # ------------------------------------------------------------------- #
-        # Step 3: Update final status in Postgres & Queue
+        # Step 3: Update final status in Postgres & Queue & PubSub
         # ------------------------------------------------------------------- #
+        new_status: str = "failed"
         async with async_session() as session:
             async with session.begin():
                 result = await session.execute(
@@ -161,6 +190,7 @@ async def process_job(
                         job.status = JobStatus.SUCCEEDED.value
                         job.result = job_result
                         job.error = None
+                        new_status = JobStatus.SUCCEEDED.value
                     else:
                         if attempts < max_attempts:
                             # Retrying state with exponential backoff
@@ -169,6 +199,7 @@ async def process_job(
                             job.status = JobStatus.RETRYING.value
                             job.run_after = run_after
                             job.error = error_msg
+                            new_status = JobStatus.RETRYING.value
                             
                             # Schedule for future retry
                             await enqueue_job(redis_client, job_id_str, priority=priority, run_after=run_after)
@@ -177,12 +208,14 @@ async def process_job(
                             # Exhausted max attempts -> Move to Dead Letter Queue (DLQ)
                             job.status = JobStatus.DEAD.value
                             job.error = error_msg
+                            new_status = JobStatus.DEAD.value
                             
                             await push_to_dlq(redis_client, job_id_str)
                             logger.warning(f"Job {job_id_str} exhausted max attempts ({attempts}/{max_attempts}). Moved to DLQ.")
 
-            # Invalidate cache for new job state
+            # Invalidate cache and publish transition event
             await invalidate_redis_cache(redis_client, job_id_str)
+            await publish_job_event(redis_client, job_id_str, old_status="running", new_status=new_status)
 
 
 async def main_loop():

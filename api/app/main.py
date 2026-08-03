@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -6,9 +7,11 @@ from sqlalchemy import select, text
 
 from app.database import engine, async_session
 from app.models_db import Base, APIKey
-from app.redis import init_redis, close_redis
+from app.redis import init_redis, close_redis, REDIS_URL
 from app.routes.jobs import router as jobs_router
 from app.routes.dlq import router as dlq_router
+from app.routes.ws import router as ws_router
+from app.services.events import start_pubsub_listener
 from forge_shared import JobStatus
 
 logger = logging.getLogger("forge.api")
@@ -23,10 +26,12 @@ async def lifespan(app: FastAPI):
       1. Creates all Postgres tables (dev convenience — use Alembic in prod).
       2. Initialises the Redis connection pool.
       3. Seeds a default developer API key if no keys exist.
+      4. Starts the background Redis Pub/Sub listener for WebSockets.
 
     On shutdown:
-      1. Closes the Redis connection pool.
-      2. Disposes the SQLAlchemy engine.
+      1. Cancels the background Pub/Sub listener task.
+      2. Closes the Redis connection pool.
+      3. Disposes the SQLAlchemy engine.
     """
     # --- Startup ---
     logger.info("Creating database tables (if not exists)...")
@@ -54,9 +59,18 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Skipped API key seeding: {e}")
 
+    # Launch background Pub/Sub listener task
+    pubsub_task = asyncio.create_task(start_pubsub_listener(REDIS_URL))
+
     yield
 
     # --- Shutdown ---
+    pubsub_task.cancel()
+    try:
+        await pubsub_task
+    except asyncio.CancelledError:
+        pass
+
     await close_redis()
     await engine.dispose()
     logger.info("All connections closed.")
@@ -72,6 +86,8 @@ app = FastAPI(
 # --- Register routers ---
 app.include_router(jobs_router, prefix="/api")
 app.include_router(dlq_router, prefix="/api")
+app.include_router(ws_router, prefix="/api")
+app.include_router(ws_router)  # Allow both /api/ws/jobs and /ws/jobs
 
 
 @app.get("/")
