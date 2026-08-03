@@ -1,3 +1,3 @@
-from .models import JobStatus, JobBase, JobCreate, JobResponse
+from .models import JobStatus, JobCreate, JobResponse, JobListResponse
 
-__all__ = ["JobStatus", "JobBase", "JobCreate", "JobResponse"]
+__all__ = ["JobStatus", "JobCreate", "JobResponse", "JobListResponse"]
