@@ -8,6 +8,7 @@ from app.database import engine
 from app.models_db import Base
 from app.redis import init_redis, close_redis
 from app.routes.jobs import router as jobs_router
+from app.routes.dlq import router as dlq_router
 from forge_shared import JobStatus
 
 logger = logging.getLogger("forge.api")
@@ -52,6 +53,7 @@ app = FastAPI(
 
 # --- Register routers ---
 app.include_router(jobs_router, prefix="/api")
+app.include_router(dlq_router, prefix="/api")
 
 
 @app.get("/")
@@ -75,9 +77,6 @@ async def health_check():
         db_status = "disconnected"
 
     # Redis check
-    # NOTE: We import _redis_pool locally because the module-level global is
-    # reassigned in init_redis(). A top-level `from app.redis import _redis_pool`
-    # would capture the initial None and never see the updated reference.
     try:
         from app.redis import _redis_pool
         if _redis_pool is not None:
