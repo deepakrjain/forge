@@ -218,6 +218,27 @@ async def process_job(
             await publish_job_event(redis_client, job_id_str, old_status="running", new_status=new_status)
 
 
+async def heartbeat_loop(redis_client: aioredis.Redis, active_tasks: Set[asyncio.Task], started_at_iso: str):
+    """Periodically publish worker heartbeat to Redis with 10s TTL."""
+    key = f"forge:worker:{WORKER_ID}"
+    while True:
+        try:
+            payload = {
+                "worker_id": WORKER_ID,
+                "active_jobs": len(active_tasks),
+                "concurrency": CONCURRENCY,
+                "last_seen": datetime.now(timezone.utc).isoformat(),
+                "started_at": started_at_iso,
+                "status": "online",
+            }
+            await redis_client.set(key, json.dumps(payload), ex=10)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logger.warning(f"Failed to send heartbeat: {e}")
+        await asyncio.sleep(3)
+
+
 async def main_loop():
     """Worker main polling loop with signal-aware graceful shutdown."""
     logger.info(f"Initializing Forge Worker [{WORKER_ID}] with CONCURRENCY={CONCURRENCY}")
@@ -232,7 +253,11 @@ async def main_loop():
 
     semaphore = asyncio.Semaphore(CONCURRENCY)
     active_tasks: Set[asyncio.Task] = set()
+    started_at_iso = datetime.now(timezone.utc).isoformat()
     shutdown_requested = False
+
+    # Start background heartbeat task
+    hb_task = asyncio.create_task(heartbeat_loop(redis_client, active_tasks, started_at_iso))
 
     def handle_signal(sig, frame):
         nonlocal shutdown_requested
@@ -286,6 +311,11 @@ async def main_loop():
                 p_task.cancel()
 
     logger.info("Closing database engine and Redis pool...")
+    hb_task.cancel()
+    try:
+        await redis_client.delete(f"forge:worker:{WORKER_ID}")
+    except Exception:
+        pass
     await redis_client.aclose()
     await engine.dispose()
     logger.info("Worker shutdown complete.")

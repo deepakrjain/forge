@@ -12,6 +12,7 @@ from app.routes.jobs import router as jobs_router
 from app.routes.dlq import router as dlq_router
 from app.routes.ws import router as ws_router
 from app.routes.metrics import router as metrics_router
+from app.routes.workers import router as workers_router
 from app.services.events import start_pubsub_listener
 from forge_shared import JobStatus
 
@@ -88,6 +89,7 @@ app = FastAPI(
 app.include_router(jobs_router, prefix="/api")
 app.include_router(dlq_router, prefix="/api")
 app.include_router(metrics_router, prefix="/api")
+app.include_router(workers_router, prefix="/api")
 app.include_router(ws_router, prefix="/api")
 app.include_router(ws_router)  # Allow both /api/ws/jobs and /ws/jobs
 
