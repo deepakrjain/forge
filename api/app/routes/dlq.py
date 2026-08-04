@@ -1,8 +1,9 @@
 """
 Dead Letter Queue (DLQ) endpoints.
 
-GET  /dlq           — List dead jobs (status = 'dead') with pagination
-POST /dlq/{id}/retry — Manually re-enqueue a dead job, resetting attempts to 0
+GET    /dlq           — List dead jobs (status = 'dead') with pagination
+POST   /dlq/{id}/retry — Manually re-enqueue a dead job, resetting attempts to 0
+DELETE /dlq/{id}       — Discard a dead job, removing it permanently
 """
 
 from uuid import UUID
@@ -108,3 +109,46 @@ async def retry_dead_job(
     await publish_job_event(redis, job_id_str, old_status="dead", new_status="queued")
 
     return job
+
+
+# --------------------------------------------------------------------------- #
+# DELETE /dlq/{job_id} — Discard a dead job
+# --------------------------------------------------------------------------- #
+@router.delete(
+    "/{job_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Discard a dead job",
+    description="Permanently delete a dead job from Postgres and the Redis DLQ.",
+)
+async def discard_dead_job(
+    job_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    redis: aioredis.Redis = Depends(get_redis),
+):
+    job_id_str = str(job_id)
+
+    async with db.begin():
+        result = await db.execute(
+            select(Job).where(Job.id == job_id).with_for_update()
+        )
+        job = result.scalars().first()
+
+        if job is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Job {job_id} not found",
+            )
+
+        if job.status != JobStatus.DEAD.value:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Job {job_id} is in status '{job.status}', not 'dead'. Only dead jobs can be discarded via DLQ.",
+            )
+
+        await db.delete(job)
+
+    await remove_from_dlq(redis, job_id_str)
+    await invalidate_job_cache(redis, job_id_str)
+    await publish_job_event(redis, job_id_str, old_status="dead", new_status=None)
+
+    return None
