@@ -18,7 +18,7 @@ from app.database import get_db
 from app.redis import get_redis
 from app.models_db import Job, APIKey
 from app.dependencies import verify_api_key_and_rate_limit
-from app.services.queue import enqueue_job
+from app.services.queue import enqueue_job, remove_job_from_queue
 from app.services.cache import get_cached_job, set_cached_job, invalidate_job_cache
 from app.services.events import publish_job_event
 from forge_shared import JobCreate, JobListResponse, JobResponse, JobStatus
@@ -243,3 +243,39 @@ async def list_jobs(
         page=page,
         per_page=per_page,
     )
+
+
+# --------------------------------------------------------------------------- #
+# DELETE /jobs/{job_id} — Delete a single job
+# --------------------------------------------------------------------------- #
+@router.delete(
+    "/{job_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a job by ID",
+)
+async def delete_job(
+    job_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    redis: aioredis.Redis = Depends(get_redis),
+):
+    job_id_str = str(job_id)
+
+    # Fetch to ensure it exists
+    result = await db.execute(select(Job).where(Job.id == job_id))
+    job = result.scalars().first()
+
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Job {job_id} not found",
+        )
+
+    # Delete from DB
+    await db.delete(job)
+    await db.commit()
+
+    # Remove from Redis queues and cache
+    await remove_job_from_queue(redis, job_id_str)
+    await invalidate_job_cache(redis, job_id_str)
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

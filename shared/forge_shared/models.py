@@ -22,6 +22,7 @@ class JobStatus(str, Enum):
     FAILED = "failed"
     RETRYING = "retrying"
     DEAD = "dead"
+    CANCELLED = "cancelled"
 
 
 class JobCreate(BaseModel):

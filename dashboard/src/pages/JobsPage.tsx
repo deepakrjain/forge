@@ -1,11 +1,13 @@
 import React, { useState, useMemo } from 'react';
-import { Plus, RefreshCw, Filter, Loader2 } from 'lucide-react';
+import { Plus, RefreshCw, Filter, Loader2, Trash2 } from 'lucide-react';
 import type { JobStatus, JobListParams } from '../lib/types';
 import { useJobs } from '../hooks/useJobs';
 import { useJobEvents } from '../hooks/useJobEvents';
 import { StatusBadge } from '../components/StatusBadge';
 import { Pagination } from '../components/Pagination';
 import { SubmitJobModal } from '../components/SubmitJobModal';
+
+import { deleteJob } from '../lib/api';
 
 const ALL_STATUSES: JobStatus[] = [
   'queued', 'running', 'succeeded', 'failed', 'retrying', 'dead',
@@ -50,6 +52,17 @@ export const JobsPage: React.FC = () => {
   const handleJobCreated = () => {
     // Re-fetch to show the newly created job
     refetch();
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!confirm('Are you sure you want to delete this job?')) return;
+    try {
+      await deleteJob(id);
+      refetch();
+    } catch (err) {
+      console.error(err);
+      alert('Failed to delete job');
+    }
   };
 
   const formatDate = (iso: string) => {
@@ -159,19 +172,22 @@ export const JobsPage: React.FC = () => {
                 <th className="px-5 py-3 text-left text-xs font-medium text-text-muted uppercase tracking-wider">
                   Created
                 </th>
+                <th className="px-5 py-3 text-right text-xs font-medium text-text-muted uppercase tracking-wider">
+                  Actions
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
               {isLoading && jobs.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-5 py-12 text-center">
+                  <td colSpan={7} className="px-5 py-12 text-center">
                     <Loader2 className="w-5 h-5 mx-auto text-text-muted animate-spin" />
                     <p className="mt-2 text-sm text-text-muted">Loading jobs…</p>
                   </td>
                 </tr>
               ) : jobs.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-5 py-12 text-center">
+                  <td colSpan={7} className="px-5 py-12 text-center">
                     <p className="text-sm text-text-muted">
                       {statusFilter
                         ? `No jobs with status "${statusFilter}"`
@@ -217,6 +233,15 @@ export const JobsPage: React.FC = () => {
                       <span className="text-xs text-text-muted">
                         {formatDate(job.created_at)}
                       </span>
+                    </td>
+                    <td className="px-5 py-3 text-right">
+                      <button
+                        onClick={() => handleDelete(job.id)}
+                        className="text-text-muted hover:text-status-failed transition-colors p-1"
+                        title="Delete Job"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
                     </td>
                   </tr>
                 ))

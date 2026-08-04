@@ -140,6 +140,16 @@ async def get_queue_depth(redis: aioredis.Redis) -> int:
     """Return total number of jobs waiting in ready queue."""
     return await redis.zcard(QUEUE_KEY)
 
+async def remove_job_from_queue(redis: aioredis.Redis, job_id: str) -> bool:
+    """Remove a job from all Redis queues (ready, delayed, dlq, processing)."""
+    async with redis.pipeline(transaction=True) as pipe:
+        pipe.zrem(QUEUE_KEY, job_id)
+        pipe.zrem(DELAYED_KEY, job_id)
+        pipe.zrem(PROCESSING_KEY, job_id)
+        pipe.zrem(DLQ_KEY, job_id)
+        res = await pipe.execute()
+    return any(res)
+
 
 async def get_dlq_depth(redis: aioredis.Redis) -> int:
     """Return total number of dead-lettered jobs in DLQ."""
