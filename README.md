@@ -98,6 +98,41 @@ Forge provides a robust architecture for executing asynchronous tasks in distrib
 
 ---
 
+## Testing
+
+Forge includes a comprehensive test suite covering unit tests, integration tests, and load tests.
+
+### Unit Tests
+
+```bash
+# Worker unit tests (backoff delay calculation)
+cd worker
+python -m pytest tests/unit -v
+
+# API unit tests (rate limiter, idempotency key logic)
+cd api
+python -m pytest tests/unit -v
+```
+
+### Integration Tests
+
+```bash
+# Requires Postgres and Redis running (docker compose up -d)
+python -m pytest tests/integration -v
+```
+
+### Load Test
+
+```bash
+# Requires API server running on port 8000
+cd tests/load
+node load_test.js
+```
+
+See [`docs/load_test_results.md`](docs/load_test_results.md) for benchmark results.
+
+---
+
 ## Design Decisions
 
 *(Reserved for personal technical decision notes and design rationale)*

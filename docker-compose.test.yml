@@ -1,0 +1,33 @@
+# Minimal test infrastructure.
+# Usage: docker compose -f docker-compose.test.yml up -d
+# Spins up isolated Postgres and Redis for integration tests.
+
+version: '3.8'
+
+services:
+  postgres-test:
+    image: postgres:16-alpine
+    container_name: forge-postgres-test
+    environment:
+      POSTGRES_DB: forge_test_db
+      POSTGRES_USER: forge_test_user
+      POSTGRES_PASSWORD: forge_test_password
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U forge_test_user -d forge_test_db"]
+      interval: 3s
+      timeout: 3s
+      retries: 5
+
+  redis-test:
+    image: redis:7-alpine
+    container_name: forge-redis-test
+    command: redis-server --appendonly no
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep PONG"]
+      interval: 3s
+      timeout: 3s
+      retries: 5
