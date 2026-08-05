@@ -8,10 +8,10 @@ Forge is a high-performance, distributed background job queue and worker platfor
 
 ## 🌐 Live Demo & Deployment
 
-Deploy the entire stack with 1-click using the included [`render.yaml`](render.yaml) blueprint on Render or deploy via Docker.
+## Live Demo & API Docs
 
-- **Live Dashboard Demo**: `https://forge-dashboard.onrender.com` *(or run locally on port 5173)*
-- **API Documentation**: `http://localhost:8000/docs` (Swagger UI)
+- **API Documentation**: Available locally at `http://localhost:8000/docs` when running via Docker Compose.
+- **Cloud Deployment**: This project includes a `render.yaml` Blueprint for 1-click deployment to [Render](https://render.com).
 
 ---
 
