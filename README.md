@@ -1,15 +1,17 @@
-# Forge — Distributed Background Job Queue & Worker Platform
+# Forge: Distributed Background Job Queue & Worker Platform
 
 Forge is a high-performance, distributed background job queue and worker platform built to demonstrate deep backend engineering concepts: reliable job execution, retry strategies, queue scheduling, persistence, and real-time observability.
 
 ---
 
-## Overview
+## Key Features
 
-Forge provides a robust architecture for executing asynchronous tasks in distributed environments:
-- **Asynchronous Execution**: Decouples API request lifecycles from heavy background tasks.
-- **Reliability & Persistence**: PostgreSQL for immutable job history and Redis for fast, memory-backed queue management.
-- **Real-Time Monitoring**: Live status tracking and metrics via WebSocket connections to a modern React dashboard.
+- **Idempotent Job Submission**: Prevents duplicate execution via client-supplied idempotency keys (`POST /jobs`).
+- **Priority Queuing & Delayed Execution**: Score-based priority execution with support for delayed execution (`run_after`).
+- **Resilient Execution & Exponential Backoff**: Automatic retries with exponential backoff and randomized jitter on handler failures.
+- **Dead Letter Queue (DLQ)**: Isolates terminally failed jobs after exhausting max attempts; supports live re-queueing and discarding.
+- **Sliding-Window Rate Limiting**: Per-API-key sliding-window rate limiting backed by atomic Redis Lua scripts.
+- **Real-Time Observability**: Event-driven WebSocket stream for live UI updates, Prometheus metrics endpoint (`GET /metrics`), and pre-configured Grafana dashboards.
 
 ---
 
@@ -50,57 +52,62 @@ Forge provides a robust architecture for executing asynchronous tasks in distrib
 
 ---
 
-## Setup
+## Setup & Quickstart
 
 ### Prerequisites
 - [Docker & Docker Compose](https://docs.docker.com/get-docker/)
 - [Python 3.10+](https://www.python.org/)
 - [Node.js 18+](https://nodejs.org/)
 
-### Quickstart
+### 1. Start Infrastructure (Postgres, Redis, Prometheus, Grafana)
+```bash
+docker compose up -d
+```
 
-1. **Start Infrastructure Services (Postgres & Redis)**
-   ```bash
-   docker-compose up -d
-   ```
+### Services Summary
 
-2. **Verify Services**
-   - PostgreSQL running on `localhost:5432`
-   - Redis running on `localhost:6379`
+| Service | Endpoint / Port | Credentials / Notes |
+|---------|-----------------|---------------------|
+| **API Server** | `http://localhost:8000` | Header: `X-API-Key: forge_dev_key_123` |
+| **Dashboard** | `http://localhost:5173` | React / Vite UI |
+| **Prometheus** | `http://localhost:9090` | Metrics scraper |
+| **Grafana** | `http://localhost:3001` | Login: `admin` / `admin` |
+| **PostgreSQL** | `localhost:5432` | DB: `forge_db`, User: `forge_user` |
+| **Redis** | `localhost:6379` | In-memory queues & Pub/Sub |
 
-3. **Install Shared Package**
-   ```bash
-   cd shared
-   pip install -e .
-   cd ..
-   ```
+### 2. Install Shared Package
+```bash
+cd shared
+pip install -e .
+cd ..
+```
 
-4. **Run API**
-   ```bash
-   cd api
-   pip install -r requirements.txt
-   uvicorn app.main:app --reload --port 8000
-   ```
+### 3. Run API
+```bash
+cd api
+pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8000
+```
 
-5. **Run Worker**
-   ```bash
-   cd worker
-   pip install -r requirements.txt
-   python -m app.main
-   ```
+### 4. Run Worker
+```bash
+cd worker
+pip install -r requirements.txt
+python -m app.main
+```
 
-6. **Run Dashboard**
-   ```bash
-   cd dashboard
-   npm install
-   npm run dev
-   ```
+### 5. Run Dashboard
+```bash
+cd dashboard
+npm install
+npm run dev
+```
 
 ---
 
 ## Testing
 
-Forge includes a comprehensive test suite covering unit tests, integration tests, and load tests.
+Forge includes a test suite covering unit tests, integration tests, and load tests.
 
 ### Unit Tests
 
@@ -133,8 +140,9 @@ See [`docs/load_test_results.md`](docs/load_test_results.md) for benchmark resul
 
 ---
 
-## Design Decisions
+## Core Design Decisions
 
-*(Reserved for personal technical decision notes and design rationale)*
-
-<!-- Add your notes here as you build out each phase -->
+- **Postgres-First Durability**: Jobs are committed to PostgreSQL *before* pushing to Redis. If Redis fails, state remains recoverable in Postgres without data loss.
+- **Redis Sorted Sets for Priority & Scheduling**: Priority is calculated as `score = -priority * 1e12 + timestamp_ms`, enabling $O(\log N)$ atomic pops of the highest priority job via `ZPOPMIN`.
+- **Atomic Lua Scripts**: Sliding-window rate limiting and delayed job promotion are executed atomically in Redis via Lua scripts to eliminate race conditions.
+- **Pub/Sub WebSocket Streaming**: Worker state changes publish events to Redis Pub/Sub, which the API broadcasts over WebSockets to provide real-time UI updates without polling.
