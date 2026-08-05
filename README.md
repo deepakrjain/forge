@@ -1,6 +1,17 @@
 # Forge: Distributed Background Job Queue & Worker Platform
 
+[![Forge CI](https://github.com/deepakrjain/forge/actions/workflows/ci.yml/badge.svg)](https://github.com/deepakrjain/forge/actions)
+
 Forge is a high-performance, distributed background job queue and worker platform built to demonstrate deep backend engineering concepts: reliable job execution, retry strategies, queue scheduling, persistence, and real-time observability.
+
+---
+
+## 🌐 Live Demo & Deployment
+
+Deploy the entire stack with 1-click using the included [`render.yaml`](render.yaml) blueprint on Render or deploy via Docker.
+
+- **Live Dashboard Demo**: `https://forge-dashboard.onrender.com` *(or run locally on port 5173)*
+- **API Documentation**: `http://localhost:8000/docs` (Swagger UI)
 
 ---
 
@@ -45,7 +56,7 @@ Forge is a high-performance, distributed background job queue and worker platfor
 ```
 
 ### Component Breakdown
-- `/api`: FastAPI service handling REST endpoints, job submission, and WebSocket broadcasts.
+- `/api`: FastAPI service handling REST endpoints, job submission, rate limiting, and WebSocket broadcasts.
 - `/worker`: Distributed consumer processes polling/popping jobs from Redis and updating status in PostgreSQL.
 - `/shared`: Shared schemas, data models, and type definitions used by both API and Worker components.
 - `/dashboard`: React + TypeScript frontend built with Vite & Recharts for visualization.
@@ -154,7 +165,8 @@ See [`docs/load_test_results.md`](docs/load_test_results.md) for benchmark resul
 
 ## Core Design Decisions
 
-- **Postgres-First Durability**: Jobs are committed to PostgreSQL *before* pushing to Redis. If Redis fails, state remains recoverable in Postgres without data loss.
-- **Redis Sorted Sets for Priority & Scheduling**: Priority is calculated as `score = -priority * 1e12 + timestamp_ms`, enabling $O(\log N)$ atomic pops of the highest priority job via `ZPOPMIN`.
-- **Atomic Lua Scripts**: Sliding-window rate limiting and delayed job promotion are executed atomically in Redis via Lua scripts to eliminate race conditions.
-- **Pub/Sub WebSocket Streaming**: Worker state changes publish events to Redis Pub/Sub, which the API broadcasts over WebSockets to provide real-time UI updates without polling.
+- **Durable-First Write Strategy (Postgres Write-Ahead)**: Jobs are committed to PostgreSQL *before* pushing to Redis. If Redis fails or restarts, state remains fully preserved in Postgres without data loss, and a recovery sweeper can safely re-enqueue missing jobs.
+- **Redis Sorted Sets for Priority Queues**: Priority and submission timestamps are encoded into a composite score: `score = -priority * 1e12 + timestamp_ms`. This allows $O(\log N)$ atomic pops of the highest priority job using `ZPOPMIN`, maintaining strict priority order.
+- **Sliding-Window Rate Limiting via Lua Scripts**: Rather than fixed-window counters (vulnerable to double-capacity bursts across minute boundaries), Forge uses a sliding-window log backed by Redis Sorted Sets. The evaluation and pruning of logs happens inside a single atomic Lua script to prevent race conditions.
+- **Event-Driven Pub/Sub WebSockets**: Instead of having the frontend poll `/api/jobs` continuously, worker state transitions emit events to Redis Pub/Sub (`forge:events:jobs`). The API consumes these channels and broadcasts them over WebSockets directly to connected clients for real-time reactivity with zero API polling overhead.
+- **Dead Letter Queue (DLQ) & Exponential Backoff with Jitter**: Failing tasks retry using $2^{\text{attempt}-1} \times \text{base}$ exponential delay supplemented with uniform randomized jitter ($0 \le \text{jitter} \le 0.5 \times \text{delay}$) to prevent thundering herd problems on downstream services. Tasks exhausting `max_attempts` land in the DLQ for manual inspection, retry, or discard.

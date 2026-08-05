@@ -1,0 +1,69 @@
+# Render Blueprint Specification for Forge Platform
+# Deploy via Render Dashboard -> Blueprints -> New Blueprint Instance
+
+services:
+  # ── 1. API Service ──────────────────────────────────────────────
+  - type: web
+    name: forge-api
+    env: docker
+    dockerfilePath: api/Dockerfile
+    dockerContext: .
+    region: oregon
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: POSTGRES_URI
+        fromDatabase:
+          name: forge-db
+          property: connectionString
+      - key: REDIS_URI
+        fromService:
+          type: redis
+          name: forge-redis
+          property: connectionString
+
+  # ── 2. Worker Service ───────────────────────────────────────────
+  - type: worker
+    name: forge-worker
+    env: docker
+    dockerfilePath: worker/Dockerfile
+    dockerContext: .
+    region: oregon
+    plan: free
+    envVars:
+      - key: POSTGRES_URI
+        fromDatabase:
+          name: forge-db
+          property: connectionString
+      - key: REDIS_URI
+        fromService:
+          type: redis
+          name: forge-redis
+          property: connectionString
+      - key: CONCURRENCY
+        value: "5"
+
+  # ── 3. Dashboard Web Service ────────────────────────────────────
+  - type: web
+    name: forge-dashboard
+    env: docker
+    dockerfilePath: dashboard/Dockerfile
+    dockerContext: .
+    region: oregon
+    plan: free
+    envVars:
+      - key: API_URL
+        fromService:
+          type: web
+          name: forge-api
+          property: url
+
+# ── Databases & Caches ───────────────────────────────────────────
+databases:
+  - name: forge-db
+    databaseName: forge_db
+    user: forge_user
+    region: oregon
+    plan: free
+
+# Note: Add a Key-Value (Redis) instance named 'forge-redis' in Render Dashboard
