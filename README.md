@@ -6,9 +6,7 @@ Forge is a high-performance, distributed background job queue and worker platfor
 
 ---
 
-## 🌐 Live Demo & Deployment
-
-## Live Demo & API Docs
+## Demo & API Docs
 
 - **API Documentation**: Available locally at `http://localhost:8000/docs` when running via Docker Compose.
 - **Cloud Deployment**: This project includes a `render.yaml` Blueprint for 1-click deployment to [Render](https://render.com).
@@ -165,8 +163,8 @@ See [`docs/load_test_results.md`](docs/load_test_results.md) for benchmark resul
 
 ## Core Design Decisions
 
-- **Durable-First Write Strategy (Postgres Write-Ahead)**: Jobs are committed to PostgreSQL *before* pushing to Redis. If Redis fails or restarts, state remains fully preserved in Postgres without data loss, and a recovery sweeper can safely re-enqueue missing jobs.
+- **Durable-First Write Strategy**: Jobs are committed to PostgreSQL *before* pushing to Redis. If Redis fails or restarts, state remains fully preserved in Postgres without data loss, and a recovery sweeper can safely re-enqueue missing jobs.
 - **Redis Sorted Sets for Priority Queues**: Priority and submission timestamps are encoded into a composite score: `score = -priority * 1e12 + timestamp_ms`. This allows $O(\log N)$ atomic pops of the highest priority job using `ZPOPMIN`, maintaining strict priority order.
-- **Sliding-Window Rate Limiting via Lua Scripts**: Rather than fixed-window counters (vulnerable to double-capacity bursts across minute boundaries), Forge uses a sliding-window log backed by Redis Sorted Sets. The evaluation and pruning of logs happens inside a single atomic Lua script to prevent race conditions.
+- **Sliding-Window Rate Limiting via Lua Scripts**: Rather than fixed-window counters, Forge uses a sliding-window log backed by Redis Sorted Sets. The evaluation and pruning of logs happens inside a single atomic Lua script to prevent race conditions.
 - **Event-Driven Pub/Sub WebSockets**: Instead of having the frontend poll `/api/jobs` continuously, worker state transitions emit events to Redis Pub/Sub (`forge:events:jobs`). The API consumes these channels and broadcasts them over WebSockets directly to connected clients for real-time reactivity with zero API polling overhead.
 - **Dead Letter Queue (DLQ) & Exponential Backoff with Jitter**: Failing tasks retry using $2^{\text{attempt}-1} \times \text{base}$ exponential delay supplemented with uniform randomized jitter ($0 \le \text{jitter} \le 0.5 \times \text{delay}$) to prevent thundering herd problems on downstream services. Tasks exhausting `max_attempts` land in the DLQ for manual inspection, retry, or discard.
