@@ -34,6 +34,49 @@ services:
       timeout: 5s
       retries: 5
 
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    container_name: forge-api
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      - POSTGRES_URI=postgresql+asyncpg://forge_user:forge_password@postgres:5432/forge_db
+      - REDIS_URI=redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    restart: always
+    environment:
+      - POSTGRES_URI=postgresql+asyncpg://forge_user:forge_password@postgres:5432/forge_db
+      - REDIS_URI=redis://redis:6379/0
+      - CONCURRENCY=5
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
+    container_name: forge-dashboard
+    restart: always
+    ports:
+      - "5173:80"
+    depends_on:
+      - api
+
   prometheus:
     image: prom/prometheus:v2.50.0
     container_name: forge-prometheus
@@ -43,6 +86,8 @@ services:
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus_data:/prometheus
+    depends_on:
+      - api
 
   grafana:
     image: grafana/grafana:10.3.0

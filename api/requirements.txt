@@ -6,7 +6,6 @@ sqlalchemy[asyncio]>=2.0.0
 asyncpg>=0.29.0
 redis[hiredis]>=5.0.0
 prometheus_client>=0.20.0
--e ../shared
 
 # Testing
 pytest>=8.0.0

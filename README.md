@@ -56,52 +56,64 @@ Forge is a high-performance, distributed background job queue and worker platfor
 
 ### Prerequisites
 - [Docker & Docker Compose](https://docs.docker.com/get-docker/)
-- [Python 3.10+](https://www.python.org/)
-- [Node.js 18+](https://nodejs.org/)
+- [Python 3.10+](https://www.python.org/) (optional, for local development/tests)
+- [Node.js 18+](https://nodejs.org/) (optional, for local development/tests)
 
-### 1. Start Infrastructure (Postgres, Redis, Prometheus, Grafana)
+---
+
+### Option A: One-Command Full Stack (Recommended)
+
+Bring up the complete containerized stack (Postgres, Redis, API, Dashboard, Prometheus, Grafana, and 3 scaled Workers) in a single command:
+
 ```bash
-docker compose up -d
+docker compose up -d --build --scale worker=3
 ```
 
 ### Services Summary
 
 | Service | Endpoint / Port | Credentials / Notes |
 |---------|-----------------|---------------------|
+| **Dashboard** | `http://localhost:5173` | React / Vite UI (Nginx proxied) |
 | **API Server** | `http://localhost:8000` | Header: `X-API-Key: forge_dev_key_123` |
-| **Dashboard** | `http://localhost:5173` | React / Vite UI |
 | **Prometheus** | `http://localhost:9090` | Metrics scraper |
 | **Grafana** | `http://localhost:3001` | Login: `admin` / `admin` |
 | **PostgreSQL** | `localhost:5432` | DB: `forge_db`, User: `forge_user` |
 | **Redis** | `localhost:6379` | In-memory queues & Pub/Sub |
 
-### 2. Install Shared Package
-```bash
-cd shared
-pip install -e .
-cd ..
-```
+---
 
-### 3. Run API
-```bash
-cd api
-pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
-```
+### Option B: Local Development Setup
 
-### 4. Run Worker
-```bash
-cd worker
-pip install -r requirements.txt
-python -m app.main
-```
+1. **Start Infrastructure Services**
+   ```bash
+   docker compose up -d postgres redis
+   ```
 
-### 5. Run Dashboard
-```bash
-cd dashboard
-npm install
-npm run dev
-```
+2. **Install Shared Package**
+   ```bash
+   cd shared && pip install -e . && cd ..
+   ```
+
+3. **Run API**
+   ```bash
+   cd api
+   pip install -r requirements.txt
+   uvicorn app.main:app --reload --port 8000
+   ```
+
+4. **Run Worker**
+   ```bash
+   cd worker
+   pip install -r requirements.txt
+   python -m app.main
+   ```
+
+5. **Run Dashboard**
+   ```bash
+   cd dashboard
+   npm install
+   npm run dev
+   ```
 
 ---
 
